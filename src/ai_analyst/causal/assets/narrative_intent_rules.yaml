@@ -1,0 +1,32 @@
+version: v1
+rules:
+  shipping_disruption:
+    deception_risk: 0.2
+    signaling_vs_capability: 0.25
+    novelty_score: 0.75
+    actionability_score: 0.8
+    propaganda_risk: 0.15
+  sanctions:
+    deception_risk: 0.35
+    signaling_vs_capability: 0.55
+    novelty_score: 0.55
+    actionability_score: 0.6
+    propaganda_risk: 0.45
+  cyber_incident:
+    deception_risk: 0.45
+    signaling_vs_capability: 0.5
+    novelty_score: 0.7
+    actionability_score: 0.65
+    propaganda_risk: 0.4
+  opec_statement:
+    deception_risk: 0.55
+    signaling_vs_capability: 0.7
+    novelty_score: 0.4
+    actionability_score: 0.45
+    propaganda_risk: 0.55
+default:
+  deception_risk: 0.3
+  signaling_vs_capability: 0.4
+  novelty_score: 0.55
+  actionability_score: 0.55
+  propaganda_risk: 0.3

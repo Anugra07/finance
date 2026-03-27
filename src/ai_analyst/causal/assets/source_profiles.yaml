@@ -1,0 +1,27 @@
+version: v1
+profiles:
+  fred:
+    reliability_score: 0.98
+    claim_verifiability: 0.98
+    source_grade: A
+    provenance_quality: 0.98
+  sec:
+    reliability_score: 0.99
+    claim_verifiability: 0.99
+    source_grade: A
+    provenance_quality: 0.99
+  tiingo:
+    reliability_score: 0.93
+    claim_verifiability: 0.95
+    source_grade: A
+    provenance_quality: 0.94
+  worldmonitor:
+    reliability_score: 0.72
+    claim_verifiability: 0.62
+    source_grade: B
+    provenance_quality: 0.7
+default:
+  reliability_score: 0.55
+  claim_verifiability: 0.5
+  source_grade: C
+  provenance_quality: 0.5

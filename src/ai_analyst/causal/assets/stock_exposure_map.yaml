@@ -1,0 +1,37 @@
+version: v1
+edges:
+  - sector: Consumer Discretionary
+    ticker: DAL
+    sign: -1
+    weight: 0.9
+    lag_days_min: 0
+    lag_days_max: 5
+    rationale: Delta is highly sensitive to jet fuel and travel disruption shocks.
+  - sector: Consumer Discretionary
+    ticker: AAL
+    sign: -1
+    weight: 0.95
+    lag_days_min: 0
+    lag_days_max: 5
+    rationale: American Airlines is very sensitive to fuel and rerouting stress.
+  - sector: Energy
+    ticker: XOM
+    sign: 1
+    weight: 0.9
+    lag_days_min: 0
+    lag_days_max: 5
+    rationale: Exxon benefits from crude repricing and upstream resilience.
+  - sector: Energy
+    ticker: CVX
+    sign: 1
+    weight: 0.85
+    lag_days_min: 0
+    lag_days_max: 5
+    rationale: Chevron benefits from oil supply repricing and integrated cash flow leverage.
+  - sector: Industrials
+    ticker: LMT
+    sign: 1
+    weight: 0.8
+    lag_days_min: 2
+    lag_days_max: 20
+    rationale: Lockheed Martin benefits from defense demand expectations.

@@ -1,0 +1,2 @@
+[console_scripts]
+ai-analyst = ai_analyst.cli.app:main

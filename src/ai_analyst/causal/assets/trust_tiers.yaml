@@ -1,0 +1,26 @@
+version: v1
+tiers:
+  experimental:
+    min_decision_confidence: 0.0
+    min_data_confidence: 0.0
+    min_state_confidence: 0.0
+    min_model_confidence: 0.0
+    min_pricing_confidence: 0.0
+    max_deception_risk: 1.0
+    require_fresh_decision_evidence: true
+  paper:
+    min_decision_confidence: 0.5
+    min_data_confidence: 0.55
+    min_state_confidence: 0.0
+    min_model_confidence: 0.0
+    min_pricing_confidence: 0.5
+    max_deception_risk: 1.0
+    require_fresh_decision_evidence: true
+  trusted:
+    min_decision_confidence: 0.65
+    min_data_confidence: 0.7
+    min_state_confidence: 0.65
+    min_model_confidence: 0.6
+    min_pricing_confidence: 0.6
+    max_deception_risk: 0.6
+    require_fresh_decision_evidence: true

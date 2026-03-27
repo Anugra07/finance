@@ -1,0 +1,92 @@
+version: v1
+edges:
+  - source_kind: theme
+    source_key: shipping_stress
+    target_kind: channel
+    target_key: rerouting
+    sign: 1
+    weight: 0.9
+    lag_days_min: 0
+    lag_days_max: 3
+    deterministic_edge: true
+    rationale: Maritime disruptions reroute flows and lift delivery friction.
+  - source_kind: theme
+    source_key: shipping_stress
+    target_kind: channel
+    target_key: insurance_spike
+    sign: 1
+    weight: 0.6
+    lag_days_min: 0
+    lag_days_max: 2
+    deterministic_edge: true
+    rationale: Chokepoint risk tends to raise war-risk premia and insurance costs.
+  - source_kind: theme
+    source_key: oil_supply_risk
+    target_kind: channel
+    target_key: supply_repricing
+    sign: 1
+    weight: 0.95
+    lag_days_min: 0
+    lag_days_max: 3
+    deterministic_edge: true
+    rationale: Supply shocks reprice crude and related input costs.
+  - source_kind: theme
+    source_key: gas_supply_risk
+    target_kind: channel
+    target_key: lng_tightness
+    sign: 1
+    weight: 0.9
+    lag_days_min: 0
+    lag_days_max: 4
+    deterministic_edge: true
+    rationale: Gas disruptions tighten LNG-linked flows and prices.
+  - source_kind: theme
+    source_key: defense_escalation
+    target_kind: channel
+    target_key: defense_demand
+    sign: 1
+    weight: 0.85
+    lag_days_min: 1
+    lag_days_max: 10
+    deterministic_edge: true
+    rationale: Escalating conflict lifts defense procurement expectations.
+  - source_kind: channel
+    source_key: rerouting
+    target_kind: mediator
+    target_key: freight_rates
+    sign: 1
+    weight: 0.8
+    lag_days_min: 0
+    lag_days_max: 5
+    deterministic_edge: false
+    rationale: Rerouting typically pressures freight pricing.
+  - source_kind: channel
+    source_key: supply_repricing
+    target_kind: mediator
+    target_key: brent
+    sign: 1
+    weight: 0.9
+    lag_days_min: 0
+    lag_days_max: 5
+    deterministic_edge: false
+    rationale: Supply repricing is confirmed by crude response.
+  - source_kind: channel
+    source_key: lng_tightness
+    target_kind: mediator
+    target_key: henry_hub
+    sign: 1
+    weight: 0.7
+    lag_days_min: 0
+    lag_days_max: 5
+    deterministic_edge: false
+    rationale: LNG tightness tends to spill into gas pricing signals.
+  - source_kind: channel
+    source_key: defense_demand
+    target_kind: mediator
+    target_key: defense_orders
+    sign: 1
+    weight: 0.7
+    lag_days_min: 2
+    lag_days_max: 20
+    deterministic_edge: false
+    rationale: Defense demand is expressed through order and budget expectations.

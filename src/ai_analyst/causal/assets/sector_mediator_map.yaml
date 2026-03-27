@@ -1,0 +1,44 @@
+version: v1
+edges:
+  - mediator: brent
+    sector: Energy
+    sign: 1
+    weight: 0.95
+    lag_days_min: 0
+    lag_days_max: 5
+    rationale: Energy earnings and sentiment improve with higher crude pricing.
+  - mediator: brent
+    sector: Consumer Discretionary
+    sign: -1
+    weight: 0.7
+    lag_days_min: 0
+    lag_days_max: 7
+    rationale: Airlines and fuel-sensitive discretionary segments face cost pressure.
+  - mediator: freight_rates
+    sector: Industrials
+    sign: -1
+    weight: 0.45
+    lag_days_min: 1
+    lag_days_max: 10
+    rationale: Supply chains and logistics-heavy industrials absorb higher friction.
+  - mediator: freight_rates
+    sector: Consumer Discretionary
+    sign: -1
+    weight: 0.5
+    lag_days_min: 1
+    lag_days_max: 10
+    rationale: Retail and travel names suffer from higher shipping costs and delays.
+  - mediator: defense_orders
+    sector: Industrials
+    sign: 1
+    weight: 0.8
+    lag_days_min: 2
+    lag_days_max: 20
+    rationale: Defense demand is concentrated in industrial and aerospace contractors.
+  - mediator: henry_hub
+    sector: Energy
+    sign: 1
+    weight: 0.6
+    lag_days_min: 0
+    lag_days_max: 7
+    rationale: Gas-linked producers and LNG infrastructure benefit from supply tightness.

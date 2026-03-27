@@ -1,0 +1,10 @@
+version: v1
+classes:
+  background:
+    max_age_days: 3650
+  context:
+    max_age_days: 30
+  market:
+    max_age_days: 1
+  decision_critical:
+    max_age_days: 1
