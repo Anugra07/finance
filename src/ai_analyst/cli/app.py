@@ -5,6 +5,7 @@ from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
 import typer
 
 from ai_analyst.config import get_settings
@@ -22,6 +23,8 @@ geo_app = typer.Typer(no_args_is_help=True)
 analyst_app = typer.Typer(no_args_is_help=True)
 portfolio_app = typer.Typer(no_args_is_help=True)
 
+paper_app = typer.Typer(no_args_is_help=True)
+
 app.add_typer(collect_app, name="collect")
 app.add_typer(transform_app, name="transform")
 app.add_typer(db_app, name="db")
@@ -30,6 +33,7 @@ app.add_typer(train_app, name="train")
 app.add_typer(geo_app, name="geo")
 app.add_typer(analyst_app, name="analyst")
 app.add_typer(portfolio_app, name="portfolio")
+app.add_typer(paper_app, name="paper-trade")
 
 
 def _csv_items(value: str | None) -> list[str]:
@@ -827,6 +831,64 @@ def geo_validate_graph() -> None:
                 "narrative_rules": len(narrative_rules.get("rules", {})),
                 "trust_tiers": len(trust_tiers.get("tiers", {})),
                 "freshness_classes": len(evidence_freshness.get("classes", {})),
+            },
+            indent=2,
+        )
+    )
+
+
+@paper_app.command("run")
+def paper_trade_run(
+    days: int = typer.Option(1, help="Number of trading days to simulate."),
+    as_of: str | None = typer.Option(None, help="Start date in ISO datetime format."),
+) -> None:
+    """Run paper trading for the given number of days."""
+    from ai_analyst.paper_trading.engine import PaperTradingEngine
+
+    settings = get_settings()
+    engine = PaperTradingEngine(settings)
+    start = parse_iso_datetime(as_of) if as_of else None
+
+    if start is None:
+        from datetime import UTC, datetime
+
+        start = datetime.now(tz=UTC)
+
+    results: list[dict] = []
+    current = start
+    for _ in range(days):
+        result = engine.run_day(current)
+        results.append(result)
+        current = current + pd.Timedelta(days=1)
+    typer.echo(json.dumps(results, indent=2, default=str))
+
+
+@paper_app.command("report")
+def paper_trade_report(
+    start_date: str | None = typer.Option(None, help="Filter start date (ISO)."),
+    end_date: str | None = typer.Option(None, help="Filter end date (ISO)."),
+) -> None:
+    """Show paper trading performance report."""
+    from ai_analyst.paper_trading.report import build_paper_trade_report
+
+    settings = get_settings()
+    payload = build_paper_trade_report(settings, start_date=start_date, end_date=end_date)
+    typer.echo(json.dumps(payload, indent=2, default=str))
+
+
+@train_app.command("regime")
+def train_regime_models() -> None:
+    """Train separate LightGBM models per HMM regime state."""
+    from ai_analyst.modeling.train import train_regime_specific
+
+    settings = get_settings()
+    artifacts = train_regime_specific(settings)
+    typer.echo(
+        json.dumps(
+            {
+                "metric_rows": len(artifacts.metrics),
+                "prediction_rows": len(artifacts.predictions),
+                "report_path": str(artifacts.report_path) if artifacts.report_path else None,
             },
             indent=2,
         )

@@ -120,6 +120,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("AI_ANALYST_TRUST_TIER"),
     )
 
+    # Paper trading
+    paper_trade_horizon_days: int = Field(default=5)
+    paper_trade_max_positions: int = Field(default=20)
+    paper_trade_model_weight: float = Field(default=0.6)
+    paper_trade_llm_weight: float = Field(default=0.4)
+
+    # Regime detection
+    hmm_n_states: int = Field(default=3)
+    hmm_retrain_days: int = Field(default=90)
+
     @field_validator(
         "workspace_root", "duckdb_path", "data_root", "reports_root", "mlruns_root", mode="before"
     )

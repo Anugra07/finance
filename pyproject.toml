@@ -52,6 +52,7 @@ v2 = [
   "cvxpy>=1.6.1",
   "prefect>=3.2.8",
   "evidently>=0.6.5",
+  "ruptures>=1.1.9",
 ]
 dev = [
   "pytest>=8.3.4",

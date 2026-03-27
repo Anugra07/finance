@@ -58,6 +58,9 @@ RELATION_DOMAIN_MAP: dict[str, str] = {
     "forecast_calibration_metrics": "forecast/calibration_metrics",
     "llm_override_log": "forecast/override_log",
     "feature_family_ablation_metrics": "forecast/feature_family_ablation",
+    "paper_trade_signals": "paper_trading/signals",
+    "paper_trade_executions": "paper_trading/executions",
+    "regime_states": "regimes/hmm_states",
 }
 
 

@@ -372,3 +372,134 @@ def train_baseline(settings: Settings, *, spec: WalkForwardSpec | None = None) -
         feature_importance=feature_importance,
         ablation_paths=ablation_paths,
     )
+
+
+def _load_spy_returns(settings: Settings) -> pd.DataFrame:
+    """Load SPY price data and compute returns + realized vol for HMM."""
+    conn = connect(settings)
+    try:
+        prices = conn.execute(
+            """
+            SELECT date, adj_close
+            FROM prices
+            WHERE ticker = 'SPY'
+            ORDER BY date
+            """
+        ).df()
+    finally:
+        conn.close()
+
+    if prices.empty:
+        return pd.DataFrame()
+    prices["date"] = pd.to_datetime(prices["date"])
+    prices = prices.set_index("date").sort_index()
+    prices["ret_1d"] = prices["adj_close"].pct_change()
+    prices["realized_vol_20d"] = prices["ret_1d"].rolling(20).std()
+    return prices.dropna()
+
+
+def train_regime_specific(
+    settings: Settings, *, spec: WalkForwardSpec | None = None
+) -> TrainingArtifacts:
+    """Train separate LightGBM models per HMM regime state.
+
+    Uses the HMMRegimeDetector to label each training date with a regime,
+    then trains a per-regime model via walk-forward validation.
+    """
+    try:
+        from ai_analyst.regime.hmm import HMMRegimeDetector
+    except ImportError:
+        raise RuntimeError("Install the [v2] extras for HMM regime detection (hmmlearn).")
+
+    spec = spec or WalkForwardSpec(label_horizon_days=settings.label_horizon_days)
+    df = load_training_frame(settings)
+    if df.empty:
+        raise ValueError("No feature/label data available. Run feature materialization first.")
+
+    # Fit HMM on SPY returns to get regime labels per date
+    spy = _load_spy_returns(settings)
+    if spy.empty:
+        raise ValueError("No SPY price data available. Collect SPY prices first.")
+
+    detector = HMMRegimeDetector(n_states=settings.hmm_n_states)
+    detector.fit(spy["ret_1d"], spy["realized_vol_20d"])
+    result = detector.predict(spy["ret_1d"], spy["realized_vol_20d"])
+
+    # Build regime label series keyed by date
+    regime_labels = pd.Series(
+        [result.state_labels.get(int(s), "unknown") for s in result.states],
+        index=result.states.index,
+        name="hmm_regime_label",
+    )
+
+    # Merge regime labels into training frame
+    df["date_idx"] = pd.to_datetime(df["date"])
+    regime_map = regime_labels.to_dict()
+    df["hmm_regime_label"] = df["date_idx"].map(regime_map).fillna("unknown")
+
+    all_metrics: list[dict[str, object]] = []
+    all_predictions: list[pd.DataFrame] = []
+
+    for regime in sorted(df["hmm_regime_label"].unique()):
+        if regime == "unknown":
+            continue
+        regime_df = df[df["hmm_regime_label"] == regime].copy()
+        if len(regime_df) < 500:
+            logger.info("Skipping regime '%s': only %d rows (need 500).", regime, len(regime_df))
+            continue
+
+        splits = generate_walk_forward_splits(regime_df, spec)
+        if not splits:
+            logger.info("Skipping regime '%s': insufficient history for walk-forward.", regime)
+            continue
+
+        for split_no, split in enumerate(splits, start=1):
+            train_df = regime_df.loc[split.train_mask].dropna(subset=FEATURE_COLUMNS)
+            val_df = regime_df.loc[split.validation_mask].dropna(subset=FEATURE_COLUMNS)
+            test_df = regime_df.loc[split.test_mask].dropna(subset=FEATURE_COLUMNS)
+            if train_df.empty or test_df.empty:
+                continue
+
+            model = _make_model()
+            _fit_model(model, train_df=train_df, val_df=val_df)
+
+            preds = test_df[
+                ["date", "ticker", "sector", "excess_alpha_rank", "excess_alpha_5d"]
+            ].copy()
+            preds["prediction"] = model.predict(test_df[FEATURE_COLUMNS])
+            preds["split_no"] = split_no
+            preds["regime"] = regime
+            preds["prob_outperform"] = preds["prediction"].clip(0.0, 1.0)
+            preds["confidence_score"] = ((preds["prediction"] - 0.5).abs() * 2.0).clip(0.0, 1.0)
+            all_predictions.append(preds)
+
+            daily_rank_ics = [_rank_ic(group) for _, group in preds.groupby("date")]
+            rank_ic = float(sum(daily_rank_ics) / len(daily_rank_ics)) if daily_rank_ics else 0.0
+            all_metrics.append(
+                {
+                    "regime": regime,
+                    "split_no": split_no,
+                    "rank_ic": rank_ic,
+                    "hit_rate": float((preds["excess_alpha_5d"] > 0).mean()),
+                    "train_rows": len(train_df),
+                    "test_rows": len(test_df),
+                }
+            )
+
+    predictions = pd.concat(all_predictions, ignore_index=True) if all_predictions else pd.DataFrame()
+    metrics_df = pd.DataFrame(all_metrics)
+    report_path = None
+    if not predictions.empty:
+        latest_date = pd.to_datetime(predictions["date"]).max()
+        nightly_report = build_ranked_report(predictions, as_of=latest_date, settings=settings)
+        report_path = (
+            settings.reports_path
+            / f"nightly_ranked_report_regime_{latest_date.date().isoformat()}.json"
+        )
+        persist_ranked_report(settings, report=nightly_report, dated_path=report_path)
+
+    return TrainingArtifacts(
+        metrics=metrics_df,
+        predictions=predictions,
+        report_path=report_path,
+    )
