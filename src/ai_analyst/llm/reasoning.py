@@ -210,7 +210,111 @@ ROLE_DISCIPLINE = (
 
 
 def _compact_context(context_pack: ContextPack) -> str:
-    return json.dumps(asdict(context_pack), indent=2, default=str)
+    def _compact_state(payload: Any) -> Any:
+        if isinstance(payload, dict):
+            compact: dict[str, Any] = {}
+            for key, value in payload.items():
+                if key in {"supporting_evidence", "version_metadata", "rows"}:
+                    continue
+                compact[key] = _compact_state(value)
+            return compact
+        if isinstance(payload, list):
+            return [_compact_state(item) for item in payload[:3]]
+        if isinstance(payload, float):
+            return round(payload, 4)
+        return payload
+
+    market_prices = context_pack.market_snapshot.get("prices", [])
+    macro_themes = context_pack.macro_snapshot.get("theme_intensities", [])
+    evidence_index = {
+        evidence_id: {
+            "source_type": payload.get("source_type"),
+            "timestamp": payload.get("timestamp"),
+            "reliability": payload.get("reliability"),
+            "freshness_class": payload.get("freshness_class"),
+        }
+        for evidence_id, payload in list(context_pack.evidence_index.items())[:12]
+    }
+    analog_matches = {
+        horizon: [
+            {
+                "analog_key": match.get("analog_key"),
+                "similarity_score": match.get("similarity_score"),
+                "analogy_strength": match.get("analogy_strength"),
+                "misleading_analogy": match.get("misleading_analogy"),
+                "important_differences": match.get("important_differences"),
+            }
+            for match in matches[:2]
+        ]
+        for horizon, matches in context_pack.analog_matches.items()
+    }
+    top_events = [
+        {
+            "event_id": event.get("event_id"),
+            "topic": event.get("topic"),
+            "theme": event.get("theme"),
+            "source": event.get("source"),
+            "region": event.get("region"),
+            "geography": event.get("geography"),
+            "severity": event.get("severity"),
+            "novelty": event.get("novelty"),
+            "market_relevance": event.get("market_relevance"),
+        }
+        for event in context_pack.top_events[:5]
+    ]
+    theme_intensities = [
+        {
+            "theme": row.get("theme"),
+            "intensity": round(float(row.get("intensity", 0.0) or 0.0), 4),
+            "event_count": row.get("event_count"),
+            "avg_severity": row.get("avg_severity"),
+            "avg_novelty": row.get("avg_novelty"),
+            "latest_event_time": row.get("latest_event_time"),
+        }
+        for row in macro_themes[:5]
+    ]
+    compact_state = {
+        "regime": _compact_state(context_pack.causal_state.get("regime", {})),
+        "themes": _compact_state(context_pack.causal_state.get("themes", {})),
+        "transmission": _compact_state(context_pack.causal_state.get("transmission", {})),
+        "mediators": _compact_state(context_pack.causal_state.get("mediators", {})),
+        "exposure": _compact_state(context_pack.causal_state.get("exposure", {})),
+        "horizon_views": _compact_state(context_pack.causal_state.get("horizon_views", [])),
+        "missing_evidence": context_pack.causal_state.get("missing_evidence", [])[:5],
+        "version_metadata": context_pack.causal_state.get("version_metadata", {}),
+    }
+    compact_payload = {
+        "ticker": context_pack.ticker,
+        "as_of": context_pack.as_of,
+        "mode": context_pack.mode,
+        "trust_tier": context_pack.trust_tier,
+        "market_snapshot": {
+            "prices": market_prices[:5],
+        },
+        "macro_snapshot": {
+            "theme_intensities": theme_intensities,
+        },
+        "top_events": top_events,
+        "freshness_flags": context_pack.freshness_flags,
+        "sector_rankings": context_pack.sector_rankings[:5],
+        "solution_ideas": context_pack.solution_ideas[:5],
+        "causal_state": compact_state,
+        "causal_chains": context_pack.causal_chains[:5],
+        "analog_matches": analog_matches,
+        "model_interpretation": _compact_state(context_pack.model_interpretation),
+        "uncertainty_map": context_pack.uncertainty_map,
+        "competing_hypotheses": context_pack.competing_hypotheses[:3],
+        "missing_evidence": context_pack.missing_evidence[:5],
+        "source_assessment": _compact_state(context_pack.source_assessment),
+        "narrative_risk": _compact_state(context_pack.narrative_risk),
+        "cross_asset_confirmation": _compact_state(context_pack.cross_asset_confirmation),
+        "pricing_discipline": _compact_state(context_pack.pricing_discipline),
+        "trade_readiness": _compact_state(context_pack.trade_readiness),
+        "confidence_breakdown": _compact_state(context_pack.confidence_breakdown),
+        "evidence_index": evidence_index,
+        "version_metadata": context_pack.version_metadata,
+    }
+    return json.dumps(compact_payload, indent=2, default=str)
 
 
 def _mode_directive(mode: str) -> str:

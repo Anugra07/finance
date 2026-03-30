@@ -21,6 +21,9 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[s
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(rendered)))
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+    handler.send_header("Access-Control-Allow-Headers", "Content-Type")
     handler.end_headers()
     handler.wfile.write(rendered)
 
@@ -39,6 +42,14 @@ def build_handler(settings: Settings) -> type[BaseHTTPRequestHandler]:
                 _json_response(self, HTTPStatus.OK, analyst_health_payload(settings))
                 return
             _json_response(self, HTTPStatus.NOT_FOUND, {"error": "not_found"})
+
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            self.send_response(HTTPStatus.NO_CONTENT)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def do_POST(self) -> None:  # noqa: N802
             body = self._body()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from typing import Any
 
 import requests
@@ -97,7 +96,75 @@ class OllamaClient:
 
 
 def _compact_context(context_pack: ContextPack) -> str:
-    return json.dumps(asdict(context_pack), indent=2, default=str)
+    def _compact_state(payload: Any) -> Any:
+        if isinstance(payload, dict):
+            compact: dict[str, Any] = {}
+            for key, value in payload.items():
+                if key in {"supporting_evidence", "version_metadata", "rows"}:
+                    continue
+                compact[key] = _compact_state(value)
+            return compact
+        if isinstance(payload, list):
+            return [_compact_state(item) for item in payload[:3]]
+        if isinstance(payload, float):
+            return round(payload, 4)
+        return payload
+
+    compact_payload = {
+        "ticker": context_pack.ticker,
+        "as_of": context_pack.as_of,
+        "market_snapshot": {
+            "prices": context_pack.market_snapshot.get("prices", [])[:5],
+        },
+        "macro_snapshot": {
+            "theme_intensities": [
+                {
+                    "theme": row.get("theme"),
+                    "intensity": round(float(row.get("intensity", 0.0) or 0.0), 4),
+                    "event_count": row.get("event_count"),
+                    "avg_severity": row.get("avg_severity"),
+                    "avg_novelty": row.get("avg_novelty"),
+                    "latest_event_time": row.get("latest_event_time"),
+                }
+                for row in context_pack.macro_snapshot.get("theme_intensities", [])[:5]
+            ],
+        },
+        "top_events": [
+            {
+                "event_id": event.get("event_id"),
+                "topic": event.get("topic"),
+                "theme": event.get("theme"),
+                "source": event.get("source"),
+                "region": event.get("region"),
+                "geography": event.get("geography"),
+                "severity": event.get("severity"),
+                "novelty": event.get("novelty"),
+                "market_relevance": event.get("market_relevance"),
+            }
+            for event in context_pack.top_events[:5]
+        ],
+        "freshness_flags": context_pack.freshness_flags,
+        "sector_rankings": context_pack.sector_rankings[:5],
+        "solution_ideas": context_pack.solution_ideas[:5],
+        "causal_chains": context_pack.causal_chains[:5],
+        "analog_matches": {
+            horizon: matches[:2] for horizon, matches in context_pack.analog_matches.items()
+        },
+        "model_interpretation": _compact_state(context_pack.model_interpretation),
+        "missing_evidence": context_pack.missing_evidence[:5],
+        "evidence_index": {
+            evidence_id: {
+                "source_type": payload.get("source_type"),
+                "timestamp": payload.get("timestamp"),
+                "reliability": payload.get("reliability"),
+                "freshness_class": payload.get("freshness_class"),
+            }
+            for evidence_id, payload in list(context_pack.evidence_index.items())[:12]
+        },
+        "trust_tier": context_pack.trust_tier,
+        "version_metadata": context_pack.version_metadata,
+    }
+    return json.dumps(compact_payload, indent=2, default=str)
 
 
 def _normalize_probability(value: object) -> float:

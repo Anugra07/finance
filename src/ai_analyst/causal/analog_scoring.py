@@ -136,6 +136,8 @@ def build_horizon_analog_matches(
 ) -> list[dict[str, object]]:
     if theme_daily.empty:
         return []
+    events_frame = events if events is not None else pd.DataFrame()
+    regimes_frame = theme_regimes if theme_regimes is not None else pd.DataFrame()
 
     frame = theme_daily.copy()
     frame["date"] = pd.to_datetime(frame["date"]).dt.date
@@ -147,8 +149,8 @@ def build_horizon_analog_matches(
 
     anchor_vector = _theme_vector(anchor)
     anchor_top_theme = _top_theme(anchor)
-    anchor_geographies = _top_geographies(events or pd.DataFrame(), as_of_date)
-    anchor_routes = _top_routes(events or pd.DataFrame(), as_of_date)
+    anchor_geographies = _top_geographies(events_frame, as_of_date)
+    anchor_routes = _top_routes(events_frame, as_of_date)
     sector_frame = sector_rankings.copy()
     sector_frame["as_of_date"] = (
         pd.to_datetime(sector_frame["as_of_date"]).dt.date if not sector_frame.empty else []
@@ -160,7 +162,7 @@ def build_horizon_analog_matches(
             anchor_top_sector = str(
                 current_sector.sort_values("sector_score", ascending=False).iloc[0]["sector"]
             )
-    regime_lookup = _regime_lookup(theme_regimes or pd.DataFrame())
+    regime_lookup = _regime_lookup(regimes_frame)
     anchor_regime = regime_lookup.get(as_of_date)
 
     matches: list[dict[str, object]] = []
@@ -171,11 +173,11 @@ def build_horizon_analog_matches(
         theme_overlap = _score_theme_overlap(anchor_vector, other_vector)
         region_similarity = _similarity_ratio(
             anchor_geographies,
-            _top_geographies(events or pd.DataFrame(), other_date),
+            _top_geographies(events_frame, other_date),
         )
         route_similarity = _similarity_ratio(
             anchor_routes,
-            _top_routes(events or pd.DataFrame(), other_date),
+            _top_routes(events_frame, other_date),
         )
         regime_similarity = (
             1.0 if anchor_regime and regime_lookup.get(other_date) == anchor_regime else 0.0
