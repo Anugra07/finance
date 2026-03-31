@@ -73,17 +73,32 @@ GEO_CONTEXT_COLUMNS = [
 ]
 
 
-def select_v1_universe(settings: Settings) -> pd.DataFrame:
+def _resolve_market_scope(settings: Settings, market_scope: str | None = None) -> str:
+    return str(market_scope or settings.primary_market_scope or "US").upper()
+
+
+def _universe_size(settings: Settings, market_scope: str) -> int:
+    return settings.india_universe_size if market_scope == "IN" else settings.v1_universe_size
+
+
+def _benchmark_ticker(settings: Settings, market_scope: str) -> str:
+    return settings.india_benchmark_ticker if market_scope == "IN" else settings.us_benchmark_ticker
+
+
+def select_v1_universe(settings: Settings, *, market_scope: str | None = None) -> pd.DataFrame:
+    resolved_scope = _resolve_market_scope(settings, market_scope)
     conn = connect(settings)
     try:
         prices = conn.execute(
             """
-            SELECT ticker, date, adj_close, volume
+            SELECT ticker, date, adj_close, volume, COALESCE(market_code, 'US') AS market_code
             FROM prices
             WHERE adj_close IS NOT NULL
               AND volume IS NOT NULL
+              AND COALESCE(market_code, 'US') = ?
             ORDER BY ticker, date
-            """
+            """,
+            [resolved_scope],
         ).df()
         members = conn.execute(
             """
@@ -92,11 +107,13 @@ def select_v1_universe(settings: Settings) -> pd.DataFrame:
                     *,
                     ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY snapshot_at DESC) AS row_num
                 FROM universe_membership
+                WHERE COALESCE(market_code, 'US') = ?
             )
             SELECT *
             FROM ranked
             WHERE row_num = 1
-            """
+            """,
+            [resolved_scope],
         ).df()
     finally:
         conn.close()
@@ -116,7 +133,7 @@ def select_v1_universe(settings: Settings) -> pd.DataFrame:
     selected = (
         members.merge(adv, on="ticker", how="inner")
         .sort_values("avg_dollar_volume_60d", ascending=False)
-        .head(settings.v1_universe_size)
+        .head(_universe_size(settings, resolved_scope))
         .copy()
     )
     selected["universe_rank"] = np.arange(1, len(selected) + 1)
@@ -124,8 +141,9 @@ def select_v1_universe(settings: Settings) -> pd.DataFrame:
     return selected
 
 
-def materialize_v1_universe(settings: Settings) -> list[str]:
-    selected = select_v1_universe(settings)
+def materialize_v1_universe(settings: Settings, *, market_scope: str | None = None) -> list[str]:
+    resolved_scope = _resolve_market_scope(settings, market_scope)
+    selected = select_v1_universe(settings, market_scope=resolved_scope)
     if selected.empty:
         return []
     snapshot_at = pd.to_datetime(selected["snapshot_at"].max(), utc=True).to_pydatetime()
@@ -134,7 +152,7 @@ def materialize_v1_universe(settings: Settings) -> list[str]:
         settings,
         domain="universe/v1_top150",
         partition_date=partition_date,
-        stem=f"v1_top150_{partition_date.isoformat()}",
+        stem=f"v1_{resolved_scope.lower()}_{partition_date.isoformat()}",
     )
     write_parquet(selected, out_path)
     return [str(out_path)]
@@ -143,7 +161,7 @@ def materialize_v1_universe(settings: Settings) -> list[str]:
 def _attach_shares_outstanding(prices: pd.DataFrame, shares: pd.DataFrame) -> pd.DataFrame:
     if shares.empty:
         prices["shares_outstanding"] = np.nan
-        prices["share_turnover"] = np.nan
+        prices["share_turnover"] = 0.0
         return prices
 
     enriched: list[pd.DataFrame] = []
@@ -174,6 +192,7 @@ def _attach_shares_outstanding(prices: pd.DataFrame, shares: pd.DataFrame) -> pd
 
     out = pd.concat(enriched, ignore_index=True)
     out["share_turnover"] = out["volume"] / out["shares_outstanding"]
+    out["share_turnover"] = pd.to_numeric(out["share_turnover"], errors="coerce").fillna(0.0)
     return out
 
 
@@ -459,7 +478,13 @@ def _attach_geo_context_features(
     return frame.drop(columns=["date_key"])
 
 
-def build_feature_and_label_frames(settings: Settings) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_feature_and_label_frames(
+    settings: Settings,
+    *,
+    market_scope: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    resolved_scope = _resolve_market_scope(settings, market_scope)
+    benchmark_ticker = _benchmark_ticker(settings, resolved_scope)
     conn = connect(settings)
     try:
         prices = conn.execute(
@@ -475,16 +500,25 @@ def build_feature_and_label_frames(settings: Settings) -> tuple[pd.DataFrame, pd
                         *,
                         ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY snapshot_at DESC) AS row_num
                     FROM v1_universe
+                    WHERE COALESCE(market_code, 'US') = ?
                 )
                 SELECT ticker, sector, cik
                 FROM ranked
                 WHERE row_num = 1
             ) u
             ON p.ticker = u.ticker
-            WHERE p.ticker = 'SPY'
-               OR p.ticker IN (SELECT ticker FROM v1_universe)
+            WHERE COALESCE(p.market_code, 'US') = ?
+              AND (
+                p.ticker = ?
+                OR p.ticker IN (
+                    SELECT ticker
+                    FROM v1_universe
+                    WHERE COALESCE(market_code, 'US') = ?
+                )
+              )
             ORDER BY p.ticker, p.date
-            """
+            """,
+            [resolved_scope, resolved_scope, benchmark_ticker, resolved_scope],
         ).df()
         shares = conn.execute(
             """
@@ -519,18 +553,11 @@ def build_feature_and_label_frames(settings: Settings) -> tuple[pd.DataFrame, pd
 
     prices["date"] = pd.to_datetime(prices["date"]).astype("datetime64[ns]")
     shares["filing_date"] = pd.to_datetime(shares["filing_date"]).astype("datetime64[ns]")
+    prices["market_code"] = prices["market_code"].fillna(resolved_scope)
     prices = prices.sort_values(["ticker", "date"])
     prices = _attach_shares_outstanding(prices, shares)
 
-    benchmark = prices.loc[prices["ticker"] == "SPY", ["date", "adj_close"]].drop_duplicates()
-    benchmark = benchmark.rename(columns={"adj_close": "spy_adj_close"}).sort_values("date")
-    benchmark["benchmark_return_5d"] = np.log(
-        benchmark["spy_adj_close"] / benchmark["spy_adj_close"].shift(5)
-    )
-    benchmark = benchmark[["date", "benchmark_return_5d"]]
-
     feature_frames: list[pd.DataFrame] = []
-
     for _ticker, group in prices.groupby("ticker", group_keys=False):
         group = group.sort_values("date").copy()
         group["log_close"] = np.log(group["adj_close"])
@@ -538,17 +565,47 @@ def build_feature_and_label_frames(settings: Settings) -> tuple[pd.DataFrame, pd
         group["ret_5d"] = group["log_close"].diff(5)
         group["ret_20d"] = group["log_close"].diff(20)
         group["ret_60d"] = group["log_close"].diff(60)
+        group["ret_126d"] = group["log_close"].diff(126)
+        group["ret_252d"] = group["log_close"].diff(252)
         group["overnight_gap"] = np.log(group["adj_open"] / group["adj_close"].shift(1))
         group["range_norm"] = (group["adj_high"] - group["adj_low"]) / group["adj_close"]
         group["realized_vol_20d"] = group["ret_1d"].rolling(20).std() * np.sqrt(20)
         group["volume_surprise_20d"] = group["volume"] / group["volume"].rolling(20).mean()
         group["return_5d"] = np.log(group["adj_close"].shift(-5) / group["adj_close"])
+        group["return_21d"] = np.log(group["adj_close"].shift(-21) / group["adj_close"])
         feature_frames.append(group)
 
     features = pd.concat(feature_frames, ignore_index=True)
-    features = features.merge(benchmark, on="date", how="left")
+
+    benchmark = (
+        prices.loc[prices["ticker"] == benchmark_ticker, ["date", "adj_close"]]
+        .drop_duplicates()
+        .rename(columns={"adj_close": "benchmark_adj_close"})
+        .sort_values("date")
+    )
+    if not benchmark.empty:
+        benchmark["benchmark_return_5d"] = np.log(
+            benchmark["benchmark_adj_close"].shift(-5) / benchmark["benchmark_adj_close"]
+        )
+        benchmark["benchmark_return_21d"] = np.log(
+            benchmark["benchmark_adj_close"].shift(-21) / benchmark["benchmark_adj_close"]
+        )
+        benchmark = benchmark[["date", "benchmark_return_5d", "benchmark_return_21d"]]
+        features = features.merge(benchmark, on="date", how="left")
+    else:
+        cross_section = (
+            features.loc[features["ticker"] != benchmark_ticker]
+            .groupby("date", as_index=False)
+            .agg(
+                benchmark_return_5d=("return_5d", "median"),
+                benchmark_return_21d=("return_21d", "median"),
+            )
+        )
+        features = features.merge(cross_section, on="date", how="left")
+
     features["excess_alpha_5d"] = features["return_5d"] - features["benchmark_return_5d"]
-    features = features.loc[features["ticker"] != "SPY"].copy()
+    features["excess_alpha_21d"] = features["return_21d"] - features["benchmark_return_21d"]
+    features = features.loc[features["ticker"] != benchmark_ticker].copy()
     features = _attach_geo_context_features(
         features,
         theme_daily=theme_daily,
@@ -568,6 +625,8 @@ def build_feature_and_label_frames(settings: Settings) -> tuple[pd.DataFrame, pd
         "ret_5d",
         "ret_20d",
         "ret_60d",
+        "ret_126d",
+        "ret_252d",
         "overnight_gap",
         "range_norm",
         "realized_vol_20d",
@@ -582,26 +641,52 @@ def build_feature_and_label_frames(settings: Settings) -> tuple[pd.DataFrame, pd
     features["known_at"] = pd.to_datetime(features["known_at"], utc=True)
     features["transform_loaded_at"] = datetime.now(tz=UTC)
     feature_rank_cols = [f"{name}_sector_pct" for name in base_features]
-    required_feature_cols = base_features + feature_rank_cols + ["benchmark_return_5d", "return_5d"]
 
     labels = features[
-        ["date", "ticker", "return_5d", "benchmark_return_5d", "excess_alpha_5d", "known_at"]
+        [
+            "date",
+            "ticker",
+            "market_code",
+            "return_5d",
+            "benchmark_return_5d",
+            "excess_alpha_5d",
+            "return_21d",
+            "benchmark_return_21d",
+            "excess_alpha_21d",
+            "known_at",
+        ]
     ].copy()
-    labels["excess_alpha_rank"] = labels.groupby("date")["excess_alpha_5d"].rank(pct=True)
+    labels["excess_alpha_rank"] = labels.groupby(["date", "market_code"])["excess_alpha_5d"].rank(
+        pct=True
+    )
+    labels["excess_alpha_rank_5d"] = labels["excess_alpha_rank"]
+    labels["excess_alpha_rank_21d"] = labels.groupby(["date", "market_code"])[
+        "excess_alpha_21d"
+    ].rank(pct=True)
     labels["transform_loaded_at"] = datetime.now(tz=UTC)
     labels = labels.dropna(
-        subset=["return_5d", "benchmark_return_5d", "excess_alpha_5d", "excess_alpha_rank"]
+        subset=[
+            "return_5d",
+            "benchmark_return_5d",
+            "excess_alpha_5d",
+            "return_21d",
+            "benchmark_return_21d",
+            "excess_alpha_21d",
+        ],
+        how="all",
     )
-    features = features.merge(labels[["date", "ticker"]], on=["date", "ticker"], how="inner")
 
     feature_cols = [
         "date",
         "ticker",
+        "market_code",
         "sector",
         "ret_1d",
         "ret_5d",
         "ret_20d",
         "ret_60d",
+        "ret_126d",
+        "ret_252d",
         "overnight_gap",
         "range_norm",
         "realized_vol_20d",
@@ -611,14 +696,43 @@ def build_feature_and_label_frames(settings: Settings) -> tuple[pd.DataFrame, pd
         "known_at",
         "transform_loaded_at",
     ]
+    required_feature_cols = [
+        "ret_1d",
+        "ret_5d",
+        "ret_20d",
+        "ret_60d",
+        "overnight_gap",
+        "range_norm",
+        "realized_vol_20d",
+        "volume_surprise_20d",
+        "share_turnover",
+    ] + [
+        "ret_1d_sector_pct",
+        "ret_5d_sector_pct",
+        "ret_20d_sector_pct",
+        "ret_60d_sector_pct",
+        "overnight_gap_sector_pct",
+        "range_norm_sector_pct",
+        "realized_vol_20d_sector_pct",
+        "volume_surprise_20d_sector_pct",
+        "share_turnover_sector_pct",
+    ]
     features = features.dropna(subset=required_feature_cols)
     features = features[feature_cols + feature_rank_cols]
+    for column in ["ret_126d", "ret_252d", "ret_126d_sector_pct", "ret_252d_sector_pct"]:
+        if column in features.columns:
+            features[column] = pd.to_numeric(features[column], errors="coerce").fillna(0.0)
     labels["date"] = pd.to_datetime(labels["date"])
     return features, labels
 
 
-def materialize_features_and_labels(settings: Settings) -> tuple[list[str], list[str]]:
-    features, labels = build_feature_and_label_frames(settings)
+def materialize_features_and_labels(
+    settings: Settings,
+    *,
+    market_scope: str | None = None,
+) -> tuple[list[str], list[str]]:
+    resolved_scope = _resolve_market_scope(settings, market_scope)
+    features, labels = build_feature_and_label_frames(settings, market_scope=resolved_scope)
     feature_paths: list[str] = []
     label_paths: list[str] = []
     if features.empty:
@@ -629,7 +743,7 @@ def materialize_features_and_labels(settings: Settings) -> tuple[list[str], list
             settings,
             domain="features/daily",
             partition_date=trade_date,
-            stem=f"features_{trade_date.isoformat()}",
+            stem=f"features_{resolved_scope.lower()}_{trade_date.isoformat()}",
         )
         write_parquet(frame, out_path)
         feature_paths.append(str(out_path))
@@ -639,7 +753,7 @@ def materialize_features_and_labels(settings: Settings) -> tuple[list[str], list
             settings,
             domain="labels/daily",
             partition_date=trade_date,
-            stem=f"labels_{trade_date.isoformat()}",
+            stem=f"labels_{resolved_scope.lower()}_{trade_date.isoformat()}",
         )
         write_parquet(frame, out_path)
         label_paths.append(str(out_path))

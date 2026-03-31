@@ -49,6 +49,8 @@ class TrainingArtifacts:
     report_path: Path | None
     feature_importance: pd.DataFrame | None = None
     ablation_paths: list[Path] | None = None
+    prediction_paths: list[Path] | None = None
+    benchmark_paths: list[Path] | None = None
 
 
 FEATURE_COLUMNS = [
@@ -124,21 +126,53 @@ FEATURE_COLUMNS = [
 ]
 
 
-def load_training_frame(settings: Settings) -> pd.DataFrame:
+def _resolve_market_scope(settings: Settings, market_scope: str | None = None) -> str:
+    return str(market_scope or settings.primary_market_scope or "US").upper()
+
+
+def _label_columns_for_horizon(horizon_days: int) -> dict[str, str]:
+    if horizon_days == 21:
+        return {
+            "return": "return_21d",
+            "benchmark_return": "benchmark_return_21d",
+            "excess_alpha": "excess_alpha_21d",
+            "rank": "excess_alpha_rank_21d",
+        }
+    return {
+        "return": "return_5d",
+        "benchmark_return": "benchmark_return_5d",
+        "excess_alpha": "excess_alpha_5d",
+        "rank": "excess_alpha_rank",
+    }
+
+
+def load_training_frame(
+    settings: Settings,
+    *,
+    horizon_days: int = 5,
+    market_scope: str | None = None,
+) -> pd.DataFrame:
+    label_columns = _label_columns_for_horizon(horizon_days)
+    resolved_scope = _resolve_market_scope(settings, market_scope)
     conn = connect(settings)
     try:
         df = conn.execute(
-            """
+            f"""
             SELECT
                 f.*,
-                l.return_5d,
-                l.benchmark_return_5d,
-                l.excess_alpha_5d,
-                l.excess_alpha_rank
+                l.{label_columns["return"]} AS target_return,
+                l.{label_columns["benchmark_return"]} AS target_benchmark_return,
+                l.{label_columns["excess_alpha"]} AS target_excess_alpha,
+                l.{label_columns["rank"]} AS target_rank
             FROM feature_matrix f
-            INNER JOIN label_matrix l USING (date, ticker)
+            INNER JOIN label_matrix l
+                ON f.date = l.date
+               AND f.ticker = l.ticker
+               AND COALESCE(f.market_code, 'US') = COALESCE(l.market_code, 'US')
+            WHERE COALESCE(f.market_code, 'US') = ?
             ORDER BY date, ticker
-            """
+            """,
+            [resolved_scope],
         ).df()
     finally:
         conn.close()
@@ -146,7 +180,32 @@ def load_training_frame(settings: Settings) -> pd.DataFrame:
     if df.empty:
         return df
     df["date"] = pd.to_datetime(df["date"])
-    df = df.dropna(subset=["excess_alpha_rank"])
+    df = df.dropna(subset=["target_rank"])
+    return df
+
+
+def load_feature_frame(
+    settings: Settings,
+    *,
+    market_scope: str | None = None,
+) -> pd.DataFrame:
+    resolved_scope = _resolve_market_scope(settings, market_scope)
+    conn = connect(settings)
+    try:
+        df = conn.execute(
+            """
+            SELECT *
+            FROM feature_matrix
+            WHERE COALESCE(market_code, 'US') = ?
+            ORDER BY date, ticker
+            """,
+            [resolved_scope],
+        ).df()
+    finally:
+        conn.close()
+    if df.empty:
+        return df
+    df["date"] = pd.to_datetime(df["date"])
     return df
 
 
@@ -215,9 +274,9 @@ def _persist_feature_family_ablation(
 
 
 def _rank_ic(frame: pd.DataFrame) -> float:
-    if frame["prediction"].nunique() <= 1 or frame["excess_alpha_rank"].nunique() <= 1:
+    if frame["prediction"].nunique() <= 1 or frame["target_rank"].nunique() <= 1:
         return 0.0
-    corr = frame["prediction"].corr(frame["excess_alpha_rank"], method="spearman")
+    corr = frame["prediction"].corr(frame["target_rank"], method="spearman")
     return float(corr) if corr == corr else 0.0
 
 
@@ -228,11 +287,11 @@ def _fit_model(
     val_df: pd.DataFrame,
 ) -> None:
     x_train = train_df[FEATURE_COLUMNS]
-    y_train = train_df["excess_alpha_rank"]
+    y_train = train_df["target_rank"]
     if LGBMRegressor is not None and isinstance(model, LGBMRegressor):
         fit_kwargs: dict[str, object] = {}
         if not val_df.empty and early_stopping is not None and log_evaluation is not None:
-            fit_kwargs["eval_set"] = [(val_df[FEATURE_COLUMNS], val_df["excess_alpha_rank"])]
+            fit_kwargs["eval_set"] = [(val_df[FEATURE_COLUMNS], val_df["target_rank"])]
             fit_kwargs["eval_metric"] = "l2"
             fit_kwargs["callbacks"] = [early_stopping(50, verbose=False), log_evaluation(0)]
         model.fit(x_train, y_train, **fit_kwargs)
@@ -240,9 +299,143 @@ def _fit_model(
     model.fit(x_train, y_train)
 
 
-def train_baseline(settings: Settings, *, spec: WalkForwardSpec | None = None) -> TrainingArtifacts:
-    spec = spec or WalkForwardSpec(label_horizon_days=settings.label_horizon_days)
-    df = load_training_frame(settings)
+def _persist_model_predictions(
+    settings: Settings,
+    *,
+    predictions: pd.DataFrame,
+    as_of: pd.Timestamp,
+) -> list[Path]:
+    if predictions.empty:
+        return []
+    frame = predictions.copy()
+    frame["transform_loaded_at"] = datetime.now(tz=UTC)
+    frame["known_at"] = pd.to_datetime(frame["known_at"], utc=True, errors="coerce")
+    out_path = warehouse_partition_path(
+        settings,
+        domain="forecast/model_predictions",
+        partition_date=pd.to_datetime(as_of).date(),
+        stem=(
+            f"model_predictions_{pd.to_datetime(as_of).date().isoformat()}_"
+            f"{str(frame['market_code'].iloc[0]).lower()}_{int(frame['horizon_days'].iloc[0])}d_"
+            f"{str(frame['prediction_context'].iloc[0]).lower()}"
+        ),
+    )
+    write_parquet(
+        frame[
+            [
+                "date",
+                "ticker",
+                "market_code",
+                "sector",
+                "horizon_days",
+                "prediction_context",
+                "prediction",
+                "prob_outperform",
+                "confidence_score",
+                "observed_excess_alpha",
+                "observed_excess_alpha_rank",
+                "split_no",
+                "known_at",
+                "transform_loaded_at",
+            ]
+        ],
+        out_path,
+    )
+    return [out_path]
+
+
+def _benchmark_style_metrics(
+    test_df: pd.DataFrame,
+    *,
+    horizon_days: int,
+    market_code: str,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    vol = (
+        pd.to_numeric(test_df.get("realized_vol_20d"), errors="coerce")
+        .replace(0.0, pd.NA)
+        .fillna(1.0)
+    )
+    strategies = {
+        "nifty200_momentum30_style": (
+            pd.to_numeric(test_df.get("ret_126d"), errors="coerce").fillna(0.0)
+            + pd.to_numeric(test_df.get("ret_252d"), errors="coerce").fillna(0.0)
+        )
+        / vol,
+        "nifty_alpha50_style": pd.to_numeric(test_df.get("ret_252d"), errors="coerce").fillna(0.0),
+    }
+    for strategy_name, scores in strategies.items():
+        frame = test_df.copy()
+        frame["prediction"] = pd.to_numeric(scores, errors="coerce").fillna(0.0)
+        rows.append(
+            {
+                "market_code": market_code,
+                "horizon_days": horizon_days,
+                "strategy_name": strategy_name,
+                "metric_name": "rank_ic",
+                "metric_value": _rank_ic(frame),
+                "source": "walkforward_style_baseline",
+            }
+        )
+        rows.append(
+            {
+                "market_code": market_code,
+                "horizon_days": horizon_days,
+                "strategy_name": strategy_name,
+                "metric_name": "hit_rate",
+                "metric_value": float((frame["target_excess_alpha"].fillna(0.0) > 0).mean()),
+                "source": "walkforward_style_baseline",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _persist_benchmark_metrics(
+    settings: Settings,
+    *,
+    as_of: pd.Timestamp,
+    benchmark_metrics: pd.DataFrame,
+) -> list[Path]:
+    if benchmark_metrics.empty:
+        return []
+    frame = benchmark_metrics.copy()
+    frame["as_of_date"] = pd.to_datetime(as_of).date()
+    frame["transform_loaded_at"] = datetime.now(tz=UTC)
+    out_path = warehouse_partition_path(
+        settings,
+        domain="forecast/benchmark_strategy_metrics",
+        partition_date=pd.to_datetime(as_of).date(),
+        stem=f"benchmark_strategy_metrics_{pd.to_datetime(as_of).date().isoformat()}",
+    )
+    write_parquet(
+        frame[
+            [
+                "as_of_date",
+                "market_code",
+                "horizon_days",
+                "strategy_name",
+                "metric_name",
+                "metric_value",
+                "source",
+                "transform_loaded_at",
+            ]
+        ],
+        out_path,
+    )
+    return [out_path]
+
+
+def train_baseline(
+    settings: Settings,
+    *,
+    spec: WalkForwardSpec | None = None,
+    horizon_days: int | None = None,
+    market_scope: str | None = None,
+) -> TrainingArtifacts:
+    resolved_horizon = int(horizon_days or settings.label_horizon_days)
+    resolved_scope = _resolve_market_scope(settings, market_scope)
+    spec = spec or WalkForwardSpec(label_horizon_days=resolved_horizon)
+    df = load_training_frame(settings, horizon_days=resolved_horizon, market_scope=resolved_scope)
     if df.empty:
         raise ValueError("No feature/label data available. Run feature materialization first.")
 
@@ -257,6 +450,7 @@ def train_baseline(settings: Settings, *, spec: WalkForwardSpec | None = None) -
     metrics_rows: list[dict[str, object]] = []
     prediction_frames: list[pd.DataFrame] = []
     importance_frames: list[dict[str, object]] = []
+    benchmark_frames: list[pd.DataFrame] = []
 
     for split_no, split in enumerate(splits, start=1):
         train_df = df.loc[split.train_mask].dropna(subset=FEATURE_COLUMNS)
@@ -281,21 +475,34 @@ def train_baseline(settings: Settings, *, spec: WalkForwardSpec | None = None) -
                     "validation_end": str(split.validation_end.date()),
                     "test_end": str(split.test_end.date()),
                     "model_type": model.__class__.__name__,
+                    "market_scope": resolved_scope,
+                    "horizon_days": resolved_horizon,
                 }
             )
 
         _fit_model(model, train_df=train_df, val_df=val_df)
         test_predictions = test_df[
-            ["date", "ticker", "sector", "excess_alpha_rank", "excess_alpha_5d"]
+            [
+                "date",
+                "ticker",
+                "market_code",
+                "sector",
+                "target_rank",
+                "target_excess_alpha",
+                "known_at",
+            ]
         ].copy()
         test_predictions["prediction"] = model.predict(test_df[FEATURE_COLUMNS])
         test_predictions["split_no"] = split_no
+        test_predictions["horizon_days"] = resolved_horizon
+        test_predictions["prediction_context"] = "walkforward_test"
         test_predictions["prob_outperform"] = test_predictions["prediction"].clip(0.0, 1.0)
         test_predictions["confidence_score"] = (
             (test_predictions["prediction"] - 0.5).abs() * 2.0
         ).clip(0.0, 1.0)
+        test_predictions["observed_excess_alpha"] = test_predictions["target_excess_alpha"]
+        test_predictions["observed_excess_alpha_rank"] = test_predictions["target_rank"]
 
-        # Compute SHAP feature importance
         if shap is not None and LGBMRegressor is not None and isinstance(model, LGBMRegressor):
             try:
                 explainer = shap.TreeExplainer(model)
@@ -317,15 +524,19 @@ def train_baseline(settings: Settings, *, spec: WalkForwardSpec | None = None) -
                 logger.warning("SHAP computation failed for split %d: %s", split_no, exc)
 
         prediction_frames.append(test_predictions)
+        benchmark_frames.append(
+            _benchmark_style_metrics(
+                test_df,
+                horizon_days=resolved_horizon,
+                market_code=resolved_scope,
+            )
+        )
 
         daily_rank_ics = [_rank_ic(group) for _, group in test_predictions.groupby("date")]
-        rank_ic = float(sum(daily_rank_ics) / len(daily_rank_ics)) if daily_rank_ics else 0.0
-        hit_rate = float((test_predictions["excess_alpha_5d"] > 0).mean())
-
         metrics = {
             "split_no": split_no,
-            "rank_ic": float(rank_ic),
-            "hit_rate": hit_rate,
+            "rank_ic": float(sum(daily_rank_ics) / len(daily_rank_ics)) if daily_rank_ics else 0.0,
+            "hit_rate": float((test_predictions["target_excess_alpha"] > 0).mean()),
             "train_rows": int(len(train_df)),
             "validation_rows": int(len(val_df)),
             "test_rows": int(len(test_df)),
@@ -341,22 +552,47 @@ def train_baseline(settings: Settings, *, spec: WalkForwardSpec | None = None) -
         elif run_ctx is not None:  # pragma: no cover
             run_ctx.end()
 
-    predictions = pd.concat(prediction_frames, ignore_index=True)
+    predictions = (
+        pd.concat(prediction_frames, ignore_index=True)
+        if prediction_frames
+        else pd.DataFrame()
+    )
     metrics_df = pd.DataFrame(metrics_rows)
     report_path = None
     ablation_paths: list[Path] = []
+    prediction_paths: list[Path] = []
+    benchmark_paths: list[Path] = []
+
     if not predictions.empty:
         latest_date = pd.to_datetime(predictions["date"]).max()
         nightly_report = build_ranked_report(predictions, as_of=latest_date, settings=settings)
-        report_path = (
-            settings.reports_path / f"nightly_ranked_report_{latest_date.date().isoformat()}.json"
+        report_name = (
+            f"nightly_ranked_report_{resolved_scope.lower()}_"
+            f"{resolved_horizon}d_{latest_date.date().isoformat()}.json"
         )
+        report_path = settings.reports_path / report_name
         persist_ranked_report(settings, report=nightly_report, dated_path=report_path)
+        prediction_paths.extend(
+            _persist_model_predictions(
+                settings,
+                predictions=predictions,
+                as_of=latest_date,
+            )
+        )
+        benchmark_metrics = (
+            pd.concat(benchmark_frames, ignore_index=True) if benchmark_frames else pd.DataFrame()
+        )
+        benchmark_paths.extend(
+            _persist_benchmark_metrics(
+                settings,
+                as_of=latest_date,
+                benchmark_metrics=benchmark_metrics,
+            )
+        )
 
     feature_importance = None
     if importance_frames:
-        feature_importance = pd.DataFrame(importance_frames)
-        feature_importance = feature_importance.set_index("split_no")
+        feature_importance = pd.DataFrame(importance_frames).set_index("split_no")
         if not predictions.empty:
             latest_date = pd.to_datetime(predictions["date"]).max()
             ablation_paths = _persist_feature_family_ablation(
@@ -365,12 +601,46 @@ def train_baseline(settings: Settings, *, spec: WalkForwardSpec | None = None) -
                 feature_importance=feature_importance.reset_index(),
             )
 
+    live_features = load_feature_frame(settings, market_scope=resolved_scope)
+    if not live_features.empty:
+        latest_live_date = pd.to_datetime(live_features["date"]).max()
+        latest_mask = pd.to_datetime(live_features["date"]) == latest_live_date
+        live_frame = live_features.loc[latest_mask].copy()
+        live_frame = live_frame.dropna(subset=FEATURE_COLUMNS)
+        trainable = df.dropna(subset=FEATURE_COLUMNS)
+        if not live_frame.empty and not trainable.empty:
+            final_model = _make_model()
+            empty_val = pd.DataFrame(columns=trainable.columns)
+            _fit_model(final_model, train_df=trainable, val_df=empty_val)
+            live_predictions = live_frame[
+                ["date", "ticker", "market_code", "sector", "known_at"]
+            ].copy()
+            live_predictions["prediction"] = final_model.predict(live_frame[FEATURE_COLUMNS])
+            live_predictions["split_no"] = 0
+            live_predictions["horizon_days"] = resolved_horizon
+            live_predictions["prediction_context"] = "live_latest"
+            live_predictions["prob_outperform"] = live_predictions["prediction"].clip(0.0, 1.0)
+            live_predictions["confidence_score"] = (
+                (live_predictions["prediction"] - 0.5).abs() * 2.0
+            ).clip(0.0, 1.0)
+            live_predictions["observed_excess_alpha"] = pd.NA
+            live_predictions["observed_excess_alpha_rank"] = pd.NA
+            prediction_paths.extend(
+                _persist_model_predictions(
+                    settings,
+                    predictions=live_predictions,
+                    as_of=latest_live_date,
+                )
+            )
+
     return TrainingArtifacts(
         metrics=metrics_df,
         predictions=predictions,
         report_path=report_path,
         feature_importance=feature_importance,
         ablation_paths=ablation_paths,
+        prediction_paths=prediction_paths,
+        benchmark_paths=benchmark_paths,
     )
 
 
@@ -401,22 +671,19 @@ def _load_spy_returns(settings: Settings) -> pd.DataFrame:
 def train_regime_specific(
     settings: Settings, *, spec: WalkForwardSpec | None = None
 ) -> TrainingArtifacts:
-    """Train separate LightGBM models per HMM regime state.
-
-    Uses the HMMRegimeDetector to label each training date with a regime,
-    then trains a per-regime model via walk-forward validation.
-    """
+    """Train separate LightGBM models per HMM regime state."""
     try:
         from ai_analyst.regime.hmm import HMMRegimeDetector
-    except ImportError:
-        raise RuntimeError("Install the [v2] extras for HMM regime detection (hmmlearn).")
+    except ImportError as exc:
+        raise RuntimeError(
+            "Install the [v2] extras for HMM regime detection (hmmlearn)."
+        ) from exc
 
     spec = spec or WalkForwardSpec(label_horizon_days=settings.label_horizon_days)
-    df = load_training_frame(settings)
+    df = load_training_frame(settings, horizon_days=settings.label_horizon_days)
     if df.empty:
         raise ValueError("No feature/label data available. Run feature materialization first.")
 
-    # Fit HMM on SPY returns to get regime labels per date
     spy = _load_spy_returns(settings)
     if spy.empty:
         raise ValueError("No SPY price data available. Collect SPY prices first.")
@@ -425,14 +692,12 @@ def train_regime_specific(
     detector.fit(spy["ret_1d"], spy["realized_vol_20d"])
     result = detector.predict(spy["ret_1d"], spy["realized_vol_20d"])
 
-    # Build regime label series keyed by date
     regime_labels = pd.Series(
         [result.state_labels.get(int(s), "unknown") for s in result.states],
         index=result.states.index,
         name="hmm_regime_label",
     )
 
-    # Merge regime labels into training frame
     df["date_idx"] = pd.to_datetime(df["date"])
     regime_map = regime_labels.to_dict()
     df["hmm_regime_label"] = df["date_idx"].map(regime_map).fillna("unknown")
@@ -464,7 +729,7 @@ def train_regime_specific(
             _fit_model(model, train_df=train_df, val_df=val_df)
 
             preds = test_df[
-                ["date", "ticker", "sector", "excess_alpha_rank", "excess_alpha_5d"]
+                ["date", "ticker", "sector", "target_rank", "target_excess_alpha"]
             ].copy()
             preds["prediction"] = model.predict(test_df[FEATURE_COLUMNS])
             preds["split_no"] = split_no
@@ -474,19 +739,24 @@ def train_regime_specific(
             all_predictions.append(preds)
 
             daily_rank_ics = [_rank_ic(group) for _, group in preds.groupby("date")]
-            rank_ic = float(sum(daily_rank_ics) / len(daily_rank_ics)) if daily_rank_ics else 0.0
             all_metrics.append(
                 {
                     "regime": regime,
                     "split_no": split_no,
-                    "rank_ic": rank_ic,
-                    "hit_rate": float((preds["excess_alpha_5d"] > 0).mean()),
+                    "rank_ic": float(sum(daily_rank_ics) / len(daily_rank_ics))
+                    if daily_rank_ics
+                    else 0.0,
+                    "hit_rate": float((preds["target_excess_alpha"] > 0).mean()),
                     "train_rows": len(train_df),
                     "test_rows": len(test_df),
                 }
             )
 
-    predictions = pd.concat(all_predictions, ignore_index=True) if all_predictions else pd.DataFrame()
+    predictions = (
+        pd.concat(all_predictions, ignore_index=True)
+        if all_predictions
+        else pd.DataFrame()
+    )
     metrics_df = pd.DataFrame(all_metrics)
     report_path = None
     if not predictions.empty:

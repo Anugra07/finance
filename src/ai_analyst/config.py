@@ -66,6 +66,21 @@ class Settings(BaseSettings):
     sec_data_base_url: str = "https://data.sec.gov"
     tiingo_base_url: str = "https://api.tiingo.com/tiingo"
     sp500_constituents_url: str = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    nse_base_url: str = "https://www.nseindia.com"
+    nse_nifty200_url: str = (
+        "https://www.niftyindices.com/IndexConstituent/ind_nifty200list.csv"
+    )
+    nse_securities_master_url: str = (
+        "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
+    )
+    nse_holidays_url: str = "https://www.nseindia.com/resources/exchange-communication-holidays"
+    nse_udiff_bhavcopy_url_template: str = (
+        "https://nsearchives.nseindia.com/content/cm/"
+        "BhavCopy_NSE_CM_0_0_0_{date_yyyymmdd}_F_0000.csv.zip"
+    )
+    nse_legacy_bhavcopy_url_template: str = (
+        "https://nsearchives.nseindia.com/content/cm/NSE_CM_bhavcopy_{date_ddmmyyyy}.csv"
+    )
     worldmonitor_base_url: str = Field(
         default="http://localhost:3000",
         validation_alias=AliasChoices("WORLDMONITOR_BASE_URL", "AI_ANALYST_WORLDMONITOR_BASE_URL"),
@@ -108,12 +123,56 @@ class Settings(BaseSettings):
         default=0,
         validation_alias=AliasChoices("AI_ANALYST_MARKET_CLOSE_MINUTE"),
     )
+    india_market_timezone: str = Field(
+        default="Asia/Kolkata",
+        validation_alias=AliasChoices("AI_ANALYST_INDIA_MARKET_TIMEZONE"),
+    )
+    india_market_close_hour: int = Field(
+        default=15,
+        validation_alias=AliasChoices("AI_ANALYST_INDIA_MARKET_CLOSE_HOUR"),
+    )
+    india_market_close_minute: int = Field(
+        default=30,
+        validation_alias=AliasChoices("AI_ANALYST_INDIA_MARKET_CLOSE_MINUTE"),
+    )
 
     v1_universe_size: int = Field(
         default=150,
         validation_alias=AliasChoices("AI_ANALYST_V1_UNIVERSE_SIZE"),
     )
+    india_universe_size: int = Field(
+        default=200,
+        validation_alias=AliasChoices("AI_ANALYST_INDIA_UNIVERSE_SIZE"),
+    )
     label_horizon_days: int = Field(default=5)
+    primary_market_scope: str = Field(
+        default="US",
+        validation_alias=AliasChoices("AI_ANALYST_PRIMARY_MARKET_SCOPE"),
+    )
+    primary_horizon_days: int = Field(
+        default=5,
+        validation_alias=AliasChoices("AI_ANALYST_PRIMARY_HORIZON_DAYS"),
+    )
+    small_account_default_capital: float = Field(
+        default=5000.0,
+        validation_alias=AliasChoices("AI_ANALYST_SMALL_ACCOUNT_DEFAULT_CAPITAL"),
+    )
+    small_account_default_currency: str = Field(
+        default="INR",
+        validation_alias=AliasChoices("AI_ANALYST_SMALL_ACCOUNT_DEFAULT_CURRENCY"),
+    )
+    india_price_source_mode: str = Field(
+        default="official_nse",
+        validation_alias=AliasChoices("AI_ANALYST_INDIA_PRICE_SOURCE_MODE"),
+    )
+    us_benchmark_ticker: str = Field(
+        default="SPY",
+        validation_alias=AliasChoices("AI_ANALYST_US_BENCHMARK_TICKER"),
+    )
+    india_benchmark_ticker: str = Field(
+        default="NIFTY200",
+        validation_alias=AliasChoices("AI_ANALYST_INDIA_BENCHMARK_TICKER"),
+    )
     macro_series: list[str] = Field(default_factory=lambda: DEFAULT_MACRO_SERIES.copy())
     trust_tier: str = Field(
         default="experimental",

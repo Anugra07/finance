@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from importlib.util import find_spec
 
 import numpy as np
 import pandas as pd
@@ -11,10 +12,9 @@ from ai_analyst.causal.regime_engine import build_theme_regimes
 
 def test_hmm_regime_detector_fits_and_predicts_3_states():
     """HMM fits on synthetic 3-regime data and recovers states."""
-    try:
-        from ai_analyst.regime.hmm import HMMRegimeDetector
-    except ImportError:
+    if find_spec("hmmlearn") is None:
         pytest.skip("hmmlearn not installed")
+    from ai_analyst.regime.hmm import HMMRegimeDetector
 
     np.random.seed(42)
     n = 300
@@ -46,10 +46,9 @@ def test_hmm_regime_detector_fits_and_predicts_3_states():
 
 def test_hmm_predict_latest():
     """predict_latest returns a label and probability dict."""
-    try:
-        from ai_analyst.regime.hmm import HMMRegimeDetector
-    except ImportError:
+    if find_spec("hmmlearn") is None:
         pytest.skip("hmmlearn not installed")
+    from ai_analyst.regime.hmm import HMMRegimeDetector
 
     np.random.seed(42)
     n = 200
@@ -71,10 +70,9 @@ def test_hmm_predict_latest():
 
 def test_changepoint_detector_finds_breaks():
     """ChangepointDetector detects a step-function break."""
-    try:
-        from ai_analyst.regime.changepoint import ChangepointDetector
-    except ImportError:
+    if find_spec("ruptures") is None:
         pytest.skip("ruptures not installed")
+    from ai_analyst.regime.changepoint import ChangepointDetector
 
     np.random.seed(42)
     dates = pd.date_range("2020-01-01", periods=200, freq="B")
@@ -112,10 +110,9 @@ def test_build_theme_regimes_backward_compatible():
 
 def test_build_theme_regimes_with_hmm_augmentation():
     """When HMM detector is passed, HMM columns are added."""
-    try:
-        from ai_analyst.regime.hmm import HMMRegimeDetector
-    except ImportError:
+    if find_spec("hmmlearn") is None:
         pytest.skip("hmmlearn not installed")
+    from ai_analyst.regime.hmm import HMMRegimeDetector
 
     np.random.seed(42)
     n = 300

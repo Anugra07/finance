@@ -159,6 +159,9 @@ def test_feature_engineering_builds_sector_features_and_labels(tmp_path) -> None
     assert "analog_failure_risk" in features.columns
     assert "pricing_divergence_score" in features.columns
     assert "causal_chain_count" in features.columns
+    assert "market_code" in features.columns
+    assert "return_21d" in labels.columns
+    assert "excess_alpha_rank_21d" in labels.columns
     assert labels["excess_alpha_rank"].between(0, 1).all()
     assert set(features["ticker"].unique()) == {"AAPL", "MSFT"}
 

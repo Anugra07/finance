@@ -58,6 +58,14 @@ def _prices_frame(
         rows.append(
             {
                 "ticker": ticker,
+                "market_code": "US",
+                "country_code": "US",
+                "exchange_code": metadata.get("exchangeCode"),
+                "currency": metadata.get("currency") or "USD",
+                "instrument_type": "equity",
+                "tradeable": True,
+                "symbol_native": ticker,
+                "symbol_vendor": ticker,
                 "date": trade_date,
                 "open": _to_float(price.get("open")),
                 "high": _to_float(price.get("high")),
@@ -71,7 +79,6 @@ def _prices_frame(
                 "volume": _to_float(price.get("volume")),
                 "div_cash": _to_float(price.get("divCash")) or 0.0,
                 "split_factor": _to_float(price.get("splitFactor")) or 1.0,
-                "exchange_code": metadata.get("exchangeCode"),
                 "name": metadata.get("name"),
                 "description": metadata.get("description"),
                 "start_date": metadata.get("startDate"),
@@ -85,6 +92,7 @@ def _actions_frame(prices: pd.DataFrame) -> pd.DataFrame:
     if prices.empty:
         return pd.DataFrame()
     return prices[["ticker", "date", "div_cash", "split_factor"]].copy()
+    
 
 
 class TiingoPriceSource(PriceSource):
@@ -194,13 +202,21 @@ def transform_prices(settings: Settings) -> tuple[list[Path], list[Path]]:
             continue
 
         prices["known_at"] = prices["date"].map(
-            lambda trade_date: market_close_known_at(trade_date, settings)
+            lambda trade_date: market_close_known_at(trade_date, settings, market_scope="US")
         )
         prices["source_snapshot"] = str(path)
         prices["transform_loaded_at"] = transform_loaded_at
         prices_out = prices[
             [
                 "ticker",
+                "market_code",
+                "country_code",
+                "exchange_code",
+                "currency",
+                "instrument_type",
+                "tradeable",
+                "symbol_native",
+                "symbol_vendor",
                 "date",
                 "open",
                 "high",
@@ -221,8 +237,10 @@ def transform_prices(settings: Settings) -> tuple[list[Path], list[Path]]:
         ].copy()
 
         actions = _actions_frame(prices)
+        actions["market_code"] = "US"
+        actions["exchange_code"] = prices.get("exchange_code", "US")
         actions["known_at"] = actions["date"].map(
-            lambda trade_date: market_close_known_at(trade_date, settings)
+            lambda trade_date: market_close_known_at(trade_date, settings, market_scope="US")
         )
         actions["source_snapshot"] = str(path)
         actions["transform_loaded_at"] = transform_loaded_at

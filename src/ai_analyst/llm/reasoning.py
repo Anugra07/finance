@@ -88,34 +88,45 @@ ROLE_SCHEMA: dict[str, Any] = {
         "judgments": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
         "evidence_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
         "uncertainties": {"type": "array", "items": {"type": "string"}, "maxItems": 2},
-        "confidence": {"type": "number"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "objection": {"type": "string"},
     },
     "required": ["judgments", "evidence_ids", "uncertainties", "confidence", "objection"],
+    "additionalProperties": False,
 }
+
+EVIDENCE_STATUS_ENUM = [
+    "supported",
+    "weakly_supported",
+    "unsupported",
+    "conflicted",
+    "missing",
+]
 
 SYNTHESIS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "base_case": {"type": "string"},
         "pricing_view": {"type": "string"},
-        "active_chains": {"type": "array", "items": {"type": "string"}},
+        "active_chains": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
         "competing_hypotheses": {
             "type": "array",
+            "maxItems": 4,
             "items": {
                 "type": "object",
                 "properties": {
                     "hypothesis": {"type": "string"},
-                    "confidence": {"type": "number"},
-                    "status": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "status": {"type": "string", "enum": EVIDENCE_STATUS_ENUM},
                     "why": {"type": "string"},
                 },
                 "required": ["hypothesis", "confidence", "status", "why"],
+                "additionalProperties": False,
             },
         },
-        "unknowns": {"type": "array", "items": {"type": "string"}},
-        "missing_evidence": {"type": "array", "items": {"type": "string"}},
-        "falsification_triggers": {"type": "array", "items": {"type": "string"}},
+        "unknowns": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "missing_evidence": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "falsification_triggers": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
     },
     "required": [
         "base_case",
@@ -126,7 +137,20 @@ SYNTHESIS_SCHEMA: dict[str, Any] = {
         "missing_evidence",
         "falsification_triggers",
     ],
+    "additionalProperties": False,
 }
+
+DECISION_HORIZON_ENUM = ["1-3 days", "1-3 weeks", "1-3 months"]
+DECISION_VERDICT_ENUM = [
+    "research_only",
+    "watch",
+    "outperform",
+    "underperform",
+    "low_conviction",
+    "actionable_bullish",
+    "actionable_bearish",
+    "abstain",
+]
 
 DECISION_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -134,21 +158,27 @@ DECISION_SCHEMA: dict[str, Any] = {
         "decision_summary": {"type": "string"},
         "horizon_verdicts": {
             "type": "array",
+            "maxItems": 3,
             "items": {
                 "type": "object",
                 "properties": {
-                    "horizon": {"type": "string"},
-                    "verdict": {"type": "string"},
-                    "confidence": {"type": "number"},
+                    "horizon": {"type": "string", "enum": DECISION_HORIZON_ENUM},
+                    "verdict": {"type": "string", "enum": DECISION_VERDICT_ENUM},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 },
                 "required": ["horizon", "verdict", "confidence"],
+                "additionalProperties": False,
             },
         },
-        "conviction": {"type": "number"},
+        "conviction": {"type": "number", "minimum": 0, "maximum": 1},
         "abstain": {"type": "boolean"},
-        "invalidation_triggers": {"type": "array", "items": {"type": "string"}},
-        "key_risks": {"type": "array", "items": {"type": "string"}},
-        "model_disagreement_flags": {"type": "array", "items": {"type": "string"}},
+        "invalidation_triggers": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "key_risks": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "model_disagreement_flags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 6,
+        },
     },
     "required": [
         "decision_summary",
@@ -159,18 +189,39 @@ DECISION_SCHEMA: dict[str, Any] = {
         "key_risks",
         "model_disagreement_flags",
     ],
+    "additionalProperties": False,
 }
+
+CRITIC_REASON_CODE_ENUM = [
+    "weak_data",
+    "stale_evidence",
+    "low_pricing_confidence",
+    "conflicted_cross_asset",
+    "high_deception_risk",
+    "low_state_confidence",
+    "low_model_confidence",
+    "analog_weakness",
+    "regime_fragility",
+    "no_trade_readiness",
+]
 
 CRITIC_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "critic_veto": {"type": "boolean"},
         "force_abstain": {"type": "boolean"},
-        "forced_mode_change": {"type": "string"},
-        "confidence_adjustment": {"type": "number"},
-        "added_risks": {"type": "array", "items": {"type": "string"}},
-        "missing_evidence": {"type": "array", "items": {"type": "string"}},
-        "critic_reason_codes": {"type": "array", "items": {"type": "string"}},
+        "forced_mode_change": {
+            "type": "string",
+            "enum": ["none", "research", "decision"],
+        },
+        "confidence_adjustment": {"type": "number", "minimum": -1, "maximum": 0},
+        "added_risks": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "missing_evidence": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "critic_reason_codes": {
+            "type": "array",
+            "items": {"type": "string", "enum": CRITIC_REASON_CODE_ENUM},
+            "maxItems": 6,
+        },
     },
     "required": [
         "critic_veto",
@@ -181,6 +232,7 @@ CRITIC_SCHEMA: dict[str, Any] = {
         "missing_evidence",
         "critic_reason_codes",
     ],
+    "additionalProperties": False,
 }
 
 ROLE_PROMPTS = {

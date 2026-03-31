@@ -60,6 +60,7 @@ def latest_sp500_tickers(
             WITH ranked AS (
                 SELECT
                     ticker,
+                    market_code,
                     ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY snapshot_at DESC) AS row_num
                 FROM universe_membership
                 WHERE ticker IS NOT NULL
@@ -68,6 +69,7 @@ def latest_sp500_tickers(
             SELECT ticker
             FROM ranked
             WHERE row_num = 1
+              AND COALESCE(market_code, 'US') = 'US'
             ORDER BY ticker
             """
         ).df()
@@ -121,6 +123,14 @@ def transform_sp500_constituents(settings: Settings) -> list[Path]:
         df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
         df["cik"] = df["cik"].map(_normalize_cik)
         df["as_of_date"] = snapshot_at.date()
+        df["market_code"] = "US"
+        df["country_code"] = "US"
+        df["exchange_code"] = "NYSE"
+        df["currency"] = "USD"
+        df["instrument_type"] = "equity"
+        df["tradeable"] = True
+        df["symbol_native"] = df["ticker"]
+        df["symbol_vendor"] = df["ticker"]
         df["snapshot_at"] = snapshot_at
         df["source_snapshot"] = str(path)
         df["transform_loaded_at"] = transform_loaded_at
@@ -128,6 +138,14 @@ def transform_sp500_constituents(settings: Settings) -> list[Path]:
             [
                 "as_of_date",
                 "ticker",
+                "market_code",
+                "country_code",
+                "exchange_code",
+                "currency",
+                "instrument_type",
+                "tradeable",
+                "symbol_native",
+                "symbol_vendor",
                 "security",
                 "sector",
                 "sub_industry",
@@ -144,5 +162,37 @@ def transform_sp500_constituents(settings: Settings) -> list[Path]:
             stem=path.stem,
         )
         write_parquet(df, out_path)
+        security_master = df.assign(
+            security_group="broad_market_universe",
+            listing_date=pd.NaT,
+        )[
+            [
+                "ticker",
+                "market_code",
+                "country_code",
+                "exchange_code",
+                "currency",
+                "instrument_type",
+                "tradeable",
+                "symbol_native",
+                "symbol_vendor",
+                "security",
+                "sector",
+                "sub_industry",
+                "cik",
+                "security_group",
+                "listing_date",
+                "snapshot_at",
+                "source_snapshot",
+                "transform_loaded_at",
+            ]
+        ]
+        security_master_path = warehouse_partition_path(
+            settings,
+            domain="universe/security_master",
+            partition_date=snapshot_at.date(),
+            stem=f"security_master_{path.stem}",
+        )
+        write_parquet(security_master, security_master_path)
         outputs.append(out_path)
     return outputs

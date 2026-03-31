@@ -431,6 +431,7 @@ class ContextPackBuilder:
             trade_readiness=as_serializable(trade_readiness),
             confidence_breakdown=as_serializable(confidence_breakdown),
             trust_tier=resolve_trust_tier(self.settings.trust_tier),
+            market_scope=str(self.settings.primary_market_scope or "US").upper(),  # type: ignore[arg-type]
             version_metadata=causal_state_payload.get("version_metadata", {})
             if isinstance(causal_state_payload, dict)
             else {},

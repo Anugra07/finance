@@ -12,6 +12,7 @@ from ai_analyst.llm.forecast import OllamaClient
 from ai_analyst.llm.reasoning import run_decision_mode, run_research_mode
 from ai_analyst.reporting.io import resolve_latest_report_path
 from ai_analyst.reporting.nightly import build_ranked_report
+from ai_analyst.shortlist.engine import build_shortlist
 from ai_analyst.warehouse.database import connect
 
 
@@ -82,3 +83,24 @@ def analyst_brief_payload(settings: Settings, *, as_of: datetime) -> dict[str, o
     if report_path is not None:
         return json.loads(report_path.read_text(encoding="utf-8"))
     return build_ranked_report(pd.DataFrame(), as_of=as_of.astimezone(UTC), settings=settings)
+
+
+def analyst_shortlist_payload(
+    settings: Settings,
+    *,
+    as_of: datetime,
+    market_scope: str = "IN",
+    capital: float | None = None,
+    base_currency: str | None = None,
+    target_horizon_days: int = 21,
+    max_candidates: int = 3,
+) -> dict[str, object]:
+    return build_shortlist(
+        settings,
+        as_of=as_of,
+        market_scope=market_scope,
+        capital=capital,
+        base_currency=base_currency,
+        target_horizon_days=target_horizon_days,
+        max_candidates=max_candidates,
+    )

@@ -24,11 +24,24 @@ def parse_date(value: str) -> date:
     return date.fromisoformat(value)
 
 
-def market_close_known_at(observation_date: date, settings: Settings) -> datetime:
-    market_tz = ZoneInfo(settings.market_timezone)
+def market_close_known_at(
+    observation_date: date,
+    settings: Settings,
+    *,
+    market_scope: str = "US",
+) -> datetime:
+    resolved_scope = str(market_scope or "US").upper()
+    if resolved_scope == "IN":
+        market_tz = ZoneInfo(settings.india_market_timezone)
+        close_hour = settings.india_market_close_hour
+        close_minute = settings.india_market_close_minute
+    else:
+        market_tz = ZoneInfo(settings.market_timezone)
+        close_hour = settings.market_close_hour
+        close_minute = settings.market_close_minute
     dt = datetime.combine(
         observation_date,
-        time(settings.market_close_hour, settings.market_close_minute),
+        time(close_hour, close_minute),
         tzinfo=market_tz,
     )
     return dt.astimezone(UTC)

@@ -16,10 +16,14 @@ def _stock_rows(frame: pd.DataFrame) -> list[dict[str, object]]:
             {
                 "ticker": row["ticker"],
                 "sector": row.get("sector"),
+                "market_code": row.get("market_code"),
+                "horizon_days": int(row.get("horizon_days", 5) or 5),
                 "expected_excess_alpha_rank": float(row["prediction"]),
                 "probability_of_outperforming": float(row["prob_outperform"]),
                 "confidence_score": float(row["confidence_score"]),
-                "observed_excess_alpha_5d": float(row.get("excess_alpha_5d", 0.0)),
+                "observed_excess_alpha_5d": float(
+                    row.get("observed_excess_alpha", row.get("excess_alpha_5d", 0.0)) or 0.0
+                ),
                 "split_no": int(row.get("split_no", 0)),
             }
         )

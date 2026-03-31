@@ -336,6 +336,31 @@ def analyst_trace(
     typer.echo(json.dumps(payload, indent=2, default=str))
 
 
+@analyst_app.command("shortlist")
+def analyst_shortlist(
+    as_of: str = typer.Option(..., help="UTC timestamp, for example 2026-03-30T10:00:00Z"),
+    market_scope: str = typer.Option("IN", help="Market scope: IN or US."),
+    capital: float = typer.Option(5000.0, help="Available capital in base currency."),
+    base_currency: str = typer.Option("INR", help="Base currency, for example INR."),
+    target_horizon_days: int = typer.Option(21, help="Target holding horizon in trading days."),
+    max_candidates: int = typer.Option(3, help="Maximum shortlist candidates to return."),
+) -> None:
+    """Build an India-first monthly shortlist with cost and tradability gates."""
+    from ai_analyst.shortlist.engine import build_shortlist
+
+    settings = get_settings()
+    payload = build_shortlist(
+        settings,
+        as_of=parse_iso_datetime(as_of),
+        market_scope=market_scope.upper(),
+        capital=capital,
+        base_currency=base_currency.upper(),
+        target_horizon_days=target_horizon_days,
+        max_candidates=max_candidates,
+    )
+    typer.echo(json.dumps(payload, indent=2, default=str))
+
+
 @db_app.command("calibration")
 def refresh_calibration_metrics() -> None:
     """Recompute calibration metrics from persisted forecasts and realized labels."""
@@ -528,6 +553,67 @@ def collect_universe() -> None:
     typer.echo(f"Saved universe snapshot to {output}")
 
 
+@collect_app.command("nse-universe")
+def collect_nse_universe() -> None:
+    from ai_analyst.sources.nse import (
+        collect_nifty200_constituents,
+        collect_nse_securities_master,
+    )
+
+    settings = get_settings()
+    universe_path = collect_nifty200_constituents(settings)
+    master_path = collect_nse_securities_master(settings)
+    typer.echo(
+        json.dumps(
+            {
+                "nifty200_path": str(universe_path),
+                "securities_master_path": str(master_path),
+            },
+            indent=2,
+        )
+    )
+
+
+@collect_app.command("nse-holidays")
+def collect_nse_holidays() -> None:
+    from ai_analyst.sources.nse import collect_nse_holidays
+
+    settings = get_settings()
+    output = collect_nse_holidays(settings)
+    typer.echo(f"Saved NSE holiday snapshot to {output}")
+
+
+@collect_app.command("nse-prices")
+def collect_nse_prices(
+    trade_date: str = typer.Option(
+        "",
+        help="Trade date in YYYY-MM-DD. Defaults to today in the current locale.",
+    ),
+    lookback_days: int = typer.Option(
+        0,
+        help="Also try prior calendar days to bridge holidays or missing reports.",
+    ),
+) -> None:
+    from ai_analyst.sources.nse import collect_nse_prices
+
+    settings = get_settings()
+    resolved_trade_date = pd.to_datetime(trade_date).date() if trade_date else None
+    outputs = collect_nse_prices(
+        settings,
+        trade_date=resolved_trade_date,
+        lookback_days=lookback_days,
+    )
+    typer.echo(
+        json.dumps(
+            {
+                "price_snapshot_count": len(outputs),
+                "paths": [str(path) for path in outputs],
+            },
+            indent=2,
+        )
+    )
+
+
 @collect_app.command("worldmonitor")
 def collect_worldmonitor(
     max_items: int = typer.Option(50, help="Maximum items per endpoint."),
@@ -597,6 +683,34 @@ def transform_universe() -> None:
     settings = get_settings()
     outputs = transform_sp500_constituents(settings)
     typer.echo(f"Materialized {len(outputs)} universe files.")
+
+
+@transform_app.command("nse")
+def transform_nse() -> None:
+    from ai_analyst.sources.nse import (
+        transform_nifty200_constituents,
+        transform_nse_holidays,
+        transform_nse_prices,
+        transform_nse_securities_master,
+    )
+
+    settings = get_settings()
+    universe_outputs = transform_nifty200_constituents(settings)
+    master_outputs = transform_nse_securities_master(settings)
+    holiday_outputs = transform_nse_holidays(settings)
+    price_outputs, action_outputs = transform_nse_prices(settings)
+    typer.echo(
+        json.dumps(
+            {
+                "universe_files": len(universe_outputs),
+                "security_master_files": len(master_outputs),
+                "holiday_files": len(holiday_outputs),
+                "price_files": len(price_outputs),
+                "action_files": len(action_outputs),
+            },
+            indent=2,
+        )
+    )
 
 
 @transform_app.command("worldmonitor")
@@ -672,7 +786,9 @@ def check_data_freshness() -> None:
 
 
 @features_app.command("build")
-def build_features() -> None:
+def build_features(
+    market_scope: str = typer.Option("US", help="Market scope for universe and features."),
+) -> None:
     from ai_analyst.features.engineering import (
         materialize_features_and_labels,
         materialize_v1_universe,
@@ -680,9 +796,12 @@ def build_features() -> None:
     from ai_analyst.warehouse.database import refresh_views
 
     settings = get_settings()
-    materialize_v1_universe(settings)
+    materialize_v1_universe(settings, market_scope=market_scope.upper())
     refresh_views(settings)
-    feature_paths, label_paths = materialize_features_and_labels(settings)
+    feature_paths, label_paths = materialize_features_and_labels(
+        settings,
+        market_scope=market_scope.upper(),
+    )
     refresh_views(settings)
     typer.echo(
         "Materialized "
@@ -692,11 +811,18 @@ def build_features() -> None:
 
 
 @train_app.command("baseline")
-def train_v1_baseline() -> None:
+def train_v1_baseline(
+    market_scope: str = typer.Option("US", help="Market scope to train."),
+    horizon_days: int = typer.Option(5, help="Label horizon in trading days."),
+) -> None:
     from ai_analyst.modeling.train import train_baseline
 
     settings = get_settings()
-    artifacts = train_baseline(settings)
+    artifacts = train_baseline(
+        settings,
+        market_scope=market_scope.upper(),
+        horizon_days=horizon_days,
+    )
     typer.echo(
         json.dumps(
             {
@@ -704,6 +830,8 @@ def train_v1_baseline() -> None:
                 "prediction_rows": len(artifacts.predictions),
                 "report_path": str(artifacts.report_path) if artifacts.report_path else None,
                 "ablation_paths": [str(path) for path in (artifacts.ablation_paths or [])],
+                "prediction_paths": [str(path) for path in (artifacts.prediction_paths or [])],
+                "benchmark_paths": [str(path) for path in (artifacts.benchmark_paths or [])],
             },
             indent=2,
         )

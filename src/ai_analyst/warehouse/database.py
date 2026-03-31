@@ -23,6 +23,8 @@ RELATION_DOMAIN_MAP: dict[str, str] = {
     "price_actions": "prices/actions",
     "universe_membership": "universe/sp500_current",
     "v1_universe": "universe/v1_top150",
+    "security_master": "universe/security_master",
+    "market_holidays": "market/holidays",
     "feature_matrix": "features/daily",
     "label_matrix": "labels/daily",
     "normalized_events": "events/normalized",
@@ -58,6 +60,8 @@ RELATION_DOMAIN_MAP: dict[str, str] = {
     "forecast_calibration_metrics": "forecast/calibration_metrics",
     "llm_override_log": "forecast/override_log",
     "feature_family_ablation_metrics": "forecast/feature_family_ablation",
+    "benchmark_strategy_metrics": "forecast/benchmark_strategy_metrics",
+    "model_predictions": "forecast/model_predictions",
     "paper_trade_signals": "paper_trading/signals",
     "paper_trade_executions": "paper_trading/executions",
     "regime_states": "regimes/hmm_states",
@@ -119,7 +123,15 @@ def refresh_views(settings: Settings) -> None:
         for relation_name, schema in CANONICAL_SCHEMAS.items():
             domain = RELATION_DOMAIN_MAP.get(relation_name)
             files = _valid_parquet_files(settings.warehouse_root / domain) if domain else []
-            query = _read_parquet_sql(files) if files else empty_relation_sql(schema)
+            if files:
+                query = (
+                    "SELECT * FROM ("
+                    f"{_read_parquet_sql(files)} "
+                    "UNION ALL BY NAME "
+                    f"{empty_relation_sql(schema)})"
+                )
+            else:
+                query = empty_relation_sql(schema)
             _drop_relation_if_exists(conn, relation_name)
             conn.execute(f"CREATE VIEW {relation_name} AS {query}")
     finally:

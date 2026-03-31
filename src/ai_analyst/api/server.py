@@ -11,6 +11,7 @@ from ai_analyst.api.service import (
     analyst_decision_payload,
     analyst_health_payload,
     analyst_research_payload,
+    analyst_shortlist_payload,
 )
 from ai_analyst.config import Settings
 from ai_analyst.utils.dates import parse_iso_datetime
@@ -86,6 +87,21 @@ def build_handler(settings: Settings) -> type[BaseHTTPRequestHandler]:
                     self,
                     HTTPStatus.OK,
                     analyst_brief_payload(settings, as_of=as_of),
+                )
+                return
+            if self.path == "/api/analyst/v1/shortlist":
+                _json_response(
+                    self,
+                    HTTPStatus.OK,
+                    analyst_shortlist_payload(
+                        settings,
+                        as_of=as_of,
+                        market_scope=str(body.get("market_scope") or "IN").upper(),
+                        capital=float(body.get("capital") or 5000),
+                        base_currency=str(body.get("base_currency") or "INR").upper(),
+                        target_horizon_days=int(body.get("target_horizon_days") or 21),
+                        max_candidates=int(body.get("max_candidates") or 3),
+                    ),
                 )
                 return
             _json_response(self, HTTPStatus.NOT_FOUND, {"error": "not_found"})
